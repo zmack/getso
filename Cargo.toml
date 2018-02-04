@@ -1,0 +1,14 @@
+[package]
+name = "getso"
+version = "0.1.0"
+authors = ["Andrei Bocan <zmaxor@gmail.com>"]
+
+[dependencies]
+clap = "*"
+tokio = "*"
+futures = "*"
+native-tls = "*"
+tokio-core = "*"
+tokio-io = "*"
+tokio-tls = "*"
+openssl = "*"
