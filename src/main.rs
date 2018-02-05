@@ -105,7 +105,10 @@ fn main() {
         tls.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     });
 
-    let http_request = format!("GET / HTTP/1.0\r\nHost: {}\r\n\r\n", url);
+    let http_request = format!(
+        "GET / HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        url
+    );
 
     println!("http request\n {}", http_request);
 
@@ -148,9 +151,21 @@ fn main() {
                 .unwrap()
                 .certificate_at_index(index)
                 .unwrap();
-            println!("Certificate {} {:?}", index + 1, current_certificate);
 
             let x509 = X509::from_der(current_certificate.to_der().as_slice()).unwrap();
+            println!(
+                "Certificate {} {:?} {:?}",
+                index + 1,
+                x509.subject_name()
+                    .entries_by_nid(openssl::nid::COMMONNAME)
+                    .map(|x| x.data().as_utf8().ok().unwrap())
+                    .collect::<Vec<openssl::string::OpensslString>>(),
+                x509.subject_alt_names()
+                    .map(|x| x.iter()
+                        .map(|subject| String::from(subject.dnsname().unwrap()))
+                        .collect::<Vec<String>>())
+                    .unwrap_or(vec![])
+            );
             println!("Not Before: {:}", x509.not_before());
             println!("Not After: {:}", x509.not_after());
         }
