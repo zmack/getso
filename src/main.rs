@@ -10,6 +10,7 @@ extern crate tokio_tls;
 use std::io;
 use std::io::BufReader;
 use std::net::ToSocketAddrs;
+use std::time::Instant;
 
 use clap::{App, Arg, SubCommand};
 use futures::Future;
@@ -19,6 +20,16 @@ use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
 use tokio_tls::TlsConnectorExt;
 use openssl::x509::{X509, X509Name};
+
+fn tls_protocol_from_string(s: &str) -> native_tls::Protocol {
+    match s {
+        "1" => Protocol::Tlsv10,
+        "1.0" => Protocol::Tlsv10,
+        "1.1" => Protocol::Tlsv11,
+        "1.2" => Protocol::Tlsv12,
+        _ => panic!("Unknown tls version"),
+    }
+}
 
 fn main() {
     let matches = App::new("Getso")
@@ -39,6 +50,14 @@ fn main() {
                 .help("Display response body"),
         )
         .arg(
+            Arg::with_name("tls-versions")
+                .short("t")
+                .long("tls")
+                .takes_value(true)
+                .multiple(true)
+                .help("Specify tls version"),
+        )
+        .arg(
             Arg::with_name("v")
                 .short("v")
                 .multiple(true)
@@ -55,6 +74,12 @@ fn main() {
 
     let url = matches.value_of("URL").unwrap();
 
+    let tls_version_strings: Vec<&str> = matches.values_of("tls-versions").unwrap().collect();
+    let tls_versions: Vec<native_tls::Protocol> = tls_version_strings
+        .iter()
+        .map(|x| tls_protocol_from_string(x))
+        .collect();
+
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     let addr = format!("{}:443", url)
@@ -64,17 +89,19 @@ fn main() {
         .unwrap();
 
     let mut builder = TlsConnector::builder().unwrap();
-    builder
-        .supported_protocols(&[Protocol::Tlsv10, Protocol::Tlsv11])
-        .unwrap();
-    let cx = builder.build().unwrap();
-    let socket = TcpStream::connect(&addr, &handle);
+    builder.supported_protocols(&tls_versions).unwrap();
 
-    // Gets a value for config if supplied by user, or defaults to "default.conf"
-    println!("Value for matches: {:?}", url);
+    let cx = builder.build().unwrap();
+    let start_time = Instant::now();
+    let socket = TcpStream::connect(&addr, &handle);
 
     let tls_handshake = socket.and_then(|socket| {
         let tls = cx.connect_async(url, socket);
+        println!(
+            "[{}.{:03}] Connection established",
+            start_time.elapsed().as_secs(),
+            start_time.elapsed().subsec_nanos() / 1_000_000
+        );
         tls.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     });
 
@@ -83,6 +110,11 @@ fn main() {
     println!("http request\n {}", http_request);
 
     let request = tls_handshake.and_then(|socket| {
+        println!(
+            "[{}.{:03}] TLS Handshake",
+            start_time.elapsed().as_secs(),
+            start_time.elapsed().subsec_nanos() / 1_000_000
+        );
         println!(
             "Negotiated Protocol: {:?}",
             socket
@@ -114,10 +146,11 @@ fn main() {
                 .context()
                 .peer_trust()
                 .unwrap()
-                .certificate_at_index(index);
-            println!("Certificate at index {} {:?}", index, current_certificate);
+                .certificate_at_index(index)
+                .unwrap();
+            println!("Certificate {} {:?}", index + 1, current_certificate);
 
-            let x509 = X509::from_der(current_certificate.unwrap().to_der().as_slice()).unwrap();
+            let x509 = X509::from_der(current_certificate.to_der().as_slice()).unwrap();
             println!("Not Before: {:}", x509.not_before());
             println!("Not After: {:}", x509.not_after());
         }
@@ -125,8 +158,14 @@ fn main() {
         tokio_io::io::write_all(socket, http_request.as_bytes())
     });
 
-    let request_future =
-        request.and_then(|(socket, _request)| tokio_io::io::read_to_end(socket, Vec::new()));
+    let request_future = request.and_then(|(socket, _request)| {
+        println!(
+            "[{}.{:03}] Response",
+            start_time.elapsed().as_secs(),
+            start_time.elapsed().subsec_nanos() / 1_000_000
+        );
+        tokio_io::io::read_to_end(socket, Vec::new())
+    });
 
     let response = core.run(request_future);
     let (_socket, data) = response.unwrap();
